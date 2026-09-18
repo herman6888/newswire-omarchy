@@ -1,0 +1,58 @@
+{
+  "schemaVersion": 1,
+  "id": "herman.newswire-zh",
+  "name": "快讯 / Newswire",
+  "version": "0.1.0",
+  "author": "Herman",
+  "license": "MIT",
+  "description": "中英双语资讯滚动条 — RSS/Atom 信息源，无 LLM、无 API key，本地缓存离线可用；点击图标切换语言",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Widget.qml"
+  },
+  "barWidget": {
+    "displayName": "快讯 / Newswire",
+    "description": "自适应宽度滚动新闻标题，点击查看列表，点击图标切换中英文",
+    "category": "Information",
+    "allowMultiple": false,
+    "defaultSection": "center",
+    "defaults": {
+      "tickerMinWidth": 160,
+      "tickerMaxWidth": 520,
+      "gap": 14,
+      "innerPadding": 8,
+      "defaultLang": "en",
+      "textPixelSize": 13,
+      "scrollStepMs": 30,
+      "scrollPixels": 1,
+      "pauseOnHover": true,
+      "showSource": true,
+      "showAge": true,
+      "refreshIntervalSec": 1800,
+      "rightGap": 56,
+      "maxItems": 60,
+      "cjkFont": "Noto Sans CJK SC",
+      "enFont": "Noto Sans"
+    },
+    "schema": [
+      { "key": "tickerMinWidth", "type": "number", "label": "滚动区最小宽度 (px)" },
+      { "key": "tickerMaxWidth", "type": "number", "label": "滚动区最大宽度 (px)" },
+      { "key": "gap", "type": "number", "label": "与相邻图标的间隙 (px)" },
+      { "key": "innerPadding", "type": "number", "label": "滚动区内部留白 (px)" },
+      { "key": "defaultLang", "type": "string", "label": "默认语言 (en/zh，首次安装默认 en)" },
+      { "key": "textPixelSize", "type": "number", "label": "字号 (9-20)" },
+      { "key": "scrollStepMs", "type": "number", "label": "滚动节拍 (ms)" },
+      { "key": "scrollPixels", "type": "number", "label": "每拍滚动像素" },
+      { "key": "pauseOnHover", "type": "boolean", "label": "悬停暂停" },
+      { "key": "showSource", "type": "boolean", "label": "显示来源" },
+      { "key": "showAge", "type": "boolean", "label": "显示相对时间" },
+      { "key": "refreshIntervalSec", "type": "number", "label": "刷新间隔 (秒)" },
+      { "key": "rightGap", "type": "number", "label": "右侧安全间隙 (px)" },
+      { "key": "maxItems", "type": "number", "label": "最多条数" },
+      { "key": "cjkFont", "type": "string", "label": "中文字体" },
+      { "key": "enFont", "type": "string", "label": "英文字体" }
+    ]
+  }
+}

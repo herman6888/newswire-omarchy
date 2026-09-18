@@ -1,0 +1,97 @@
+{
+  "_comment": "出厂预设信息源（插件目录内 = 只读，运行期永不写）。用户可写的源列表在 ~/.config/omarchy-newswire-zh/feeds.json，首次运行时从本文件 seed。zh=中文预设，en=英文预设，随界面语言切换。",
+  "zh": [
+    {
+      "name": "少数派",
+      "url": "https://sspai.com/feed",
+      "enabled": true
+    },
+    {
+      "name": "Solidot",
+      "url": "https://www.solidot.org/index.rss",
+      "enabled": true
+    },
+    {
+      "name": "IT之家",
+      "url": "https://www.ithome.com/rss/",
+      "enabled": true
+    },
+    {
+      "name": "爱范儿",
+      "url": "https://www.ifanr.com/feed",
+      "enabled": true
+    },
+    {
+      "name": "极客公园",
+      "url": "https://www.geekpark.net/rss",
+      "enabled": true
+    },
+    {
+      "name": "开源中国",
+      "url": "https://www.oschina.net/news/rss",
+      "enabled": true
+    },
+    {
+      "name": "InfoQ中文",
+      "url": "https://www.infoq.cn/feed",
+      "enabled": true
+    },
+    {
+      "name": "中新网",
+      "url": "https://www.chinanews.com.cn/rss/scroll-news.xml",
+      "enabled": true
+    },
+    {
+      "name": "Google中文",
+      "url": "https://news.google.com/rss?hl=zh-CN&gl=CN&ceid=CN:zh-Hans",
+      "enabled": false
+    }
+  ],
+  "en": [
+    {
+      "name": "BBC World",
+      "url": "https://feeds.bbci.co.uk/news/world/rss.xml",
+      "enabled": true
+    },
+    {
+      "name": "BBC Tech",
+      "url": "https://feeds.bbci.co.uk/news/technology/rss.xml",
+      "enabled": true
+    },
+    {
+      "name": "BBC Business",
+      "url": "https://feeds.bbci.co.uk/news/business/rss.xml",
+      "enabled": true
+    },
+    {
+      "name": "Ars Technica",
+      "url": "https://feeds.arstechnica.com/arstechnica/index",
+      "enabled": true
+    },
+    {
+      "name": "Wired",
+      "url": "https://www.wired.com/feed/rss",
+      "enabled": true
+    },
+    {
+      "name": "Wired AI",
+      "url": "https://www.wired.com/feed/tag/ai/latest/rss",
+      "enabled": true
+    },
+    {
+      "name": "BBC Science",
+      "url": "https://feeds.bbci.co.uk/news/science_and_environment/rss.xml",
+      "enabled": false
+    },
+    {
+      "name": "TechCrunch",
+      "url": "https://techcrunch.com/feed/",
+      "enabled": false
+    },
+    {
+      "name": "The Verge",
+      "url": "https://www.theverge.com/rss/index.xml",
+      "enabled": false
+    }
+  ]
+}
