@@ -441,13 +441,67 @@ Item {
     }
   }
 
+  // ---- 动态右边界 ----
+  // center 区整体居中：ticker 变宽会把整条 center 行往左推（更新图标抖动），
+  // 太宽时右端盖住 right 区的 tray「<」。第三方 widget 拿到的 bar facade 不暴露
+  // moduleSlots，所以这里直接走窗口 item 树：找 bar 窗口里「右锚定」的区块
+  // （右缘贴内容区右缘、位于半屏右侧、非全宽背景），取其最左 x = right 区左缘。
+  // tray 悬停展开 → right 区变宽 → 左缘左移 → ticker 自动收窄。
+  property real rightAvail: Infinity
+
+  function findRightSectionLeft(item, cw, depth) {
+    if (!item || depth > 4) return Infinity
+    var best = Infinity
+    var kids = item.children || []
+    for (var i = 0; i < kids.length; i++) {
+      var c = kids[i]
+      if (!c || !c.visible || c.width <= 0) continue
+      var rightEdge = c.x + c.width
+      // 右锚定特征：右缘贴内容区右缘、起点在半屏右侧、不是全宽背景
+      if (rightEdge >= cw - 12 && c.x > cw * 0.5 && c.width < cw * 0.9) {
+        if (c.x < best) best = c.x
+      } else if (depth < 4) {
+        var sub = findRightSectionLeft(c, cw, depth + 1)
+        if (sub < best) best = sub
+      }
+    }
+    return best
+  }
+
+  function recomputeRightAvail() {
+    var win = root.QsWindow ? root.QsWindow.window : null
+    if (!win || !win.contentItem) { console.warn("[NW] rAvail: no win/contentItem"); return }
+    var cw = win.contentItem.width
+    if (cw <= 0) { console.warn("[NW] rAvail: cw=0"); return }
+    var minX = findRightSectionLeft(win.contentItem, cw, 0)
+    if (minX === Infinity) return
+
+    // ticker 起点（窗口坐标）= widget 自身 x + 图标 + 间距；再留 8px 呼吸位
+    var selfX = root.mapToItem(win.contentItem, 0, 0).x
+    var avail = Math.max(root.tickerMinWidth,
+                        minX - selfX - newsIcon.width - root.gap - 8)
+    if (Math.abs(avail - root.rightAvail) > 1) {
+      console.warn("[NW] rightAvail=" + avail.toFixed(0) + " (rightSecX=" + minX.toFixed(0) + " cw=" + cw + ")")
+      root.rightAvail = avail
+    }
+  }
+
+  Timer {
+    id: boundaryTimer
+    interval: 300
+    running: !root.vertical && !!root.bar
+    repeat: true
+    onTriggered: root.recomputeRightAvail()
+  }
+
   // 自适应宽度滚动区
   Item {
     id: tickerClip
     anchors.verticalCenter: parent.verticalCenter
     x: newsIcon.width + root.gap
-    width: root.vertical ? 0 : Math.max(root.tickerMinWidth,
-           Math.min(root.tickerMaxWidth, tickerText.implicitWidth + root.innerPad * 2))
+    // 固定宽度 = min(设定上限, 动态可用)：不随标题长度变化，center 行不再抖动；
+    // 且永不超过 right 区左缘（tray「<」/更新图标不被遮挡，展开时自动收窄）
+    width: root.vertical ? 0 : Math.min(root.tickerMaxWidth, root.rightAvail)
     height: parent.height
     clip: true
     Behavior on width { NumberAnimation { duration: 180; easing.type: Easing.OutCubic } }
