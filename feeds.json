@@ -2,6 +2,26 @@
   "_comment": "出厂预设信息源（插件目录内 = 只读，运行期永不写）。用户可写的源列表在 ~/.config/omarchy-newswire-zh/feeds.json，首次运行时从本文件 seed。zh=中文预设，en=英文预设，随界面语言切换。",
   "zh": [
     {
+      "name": "微博热搜",
+      "url": "https://newsnow.busiyi.world/api/s?id=weibo",
+      "enabled": true
+    },
+    {
+      "name": "知乎热榜",
+      "url": "https://newsnow.busiyi.world/api/s?id=zhihu",
+      "enabled": true
+    },
+    {
+      "name": "B站热搜",
+      "url": "https://newsnow.busiyi.world/api/s?id=bilibili-hot-search",
+      "enabled": true
+    },
+    {
+      "name": "头条热榜",
+      "url": "https://newsnow.busiyi.world/api/s?id=toutiao",
+      "enabled": true
+    },
+    {
       "name": "少数派",
       "url": "https://sspai.com/feed",
       "enabled": true

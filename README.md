@@ -125,7 +125,10 @@ journalctl --user -o cat | grep -i newswire          # clean runtime log
 
 - 36氪 / PingWest serve JS anti-bot challenge pages (no valid public RSS);
   removed from presets. Route through a self-hosted RSSHub if needed.
-- Weibo/Baidu hot-search need signed APIs with no stable public RSS; not included.
+- Weibo / Zhihu / Bilibili / Toutiao hot lists are included via the
+  [NewsNow](https://newsnow.busiyi.world) public JSON API (built-in adapter,
+  no self-hosting required). Point any feed URL at
+  `https://newsnow.busiyi.world/api/s?id=<source>` and it is parsed natively.
 - On this project's gateway, EN→ZH translation batches can take ~25 s; the
   per-target budget may cut a batch short — the remainder is translated on the
   next refresh (cache guarantees no duplicate work).

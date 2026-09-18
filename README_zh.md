@@ -115,7 +115,9 @@ journalctl --user -o cat | grep -i newswire          # 运行日志应干净
 
 - 36氪 / PingWest 返回 JS 反爬挑战页（无有效公开 RSS），已从预设移除；
   需要时自建 RSSHub 代理接入
-- 微博 / 百度热搜需签名接口、无稳定公开 RSS，未纳入
+- 微博 / 知乎 / B站 / 头条热榜已通过 [NewsNow](https://newsnow.busiyi.world)
+  公共 JSON API 内置支持（自带适配器，无需自建）。信息源 URL 指向
+  `https://newsnow.busiyi.world/api/s?id=<源>` 即自动走 JSON 解析
 - 本项目所用网关上 EN→ZH 翻译单批约 25s，预算可能截断当批——
   剩余标题下次刷新自动补齐（缓存保证不重复翻译）
 

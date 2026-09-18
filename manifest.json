@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "herman.newswire-zh",
   "name": "快讯 / Newswire",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": "Herman",
   "license": "MIT",
   "description": "中英双语资讯滚动条 — RSS/Atom 信息源，无 LLM、无 API key，本地缓存离线可用；点击图标切换语言",

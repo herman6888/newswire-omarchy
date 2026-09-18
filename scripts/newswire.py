@@ -293,6 +293,78 @@ def parse_feed(data: bytes):
     return items
 
 
+# ---------------------------------------------------------------- NewsNow 热榜适配器
+# NewsNow 公共实例返回 JSON（非 RSS），用于微博/知乎/B站/头条这类没有官方 RSS 的热榜。
+# 只按 URL 特征识别走这个分支；SSRF 校验完全沿用 validate_url / fetch_with_redirects，
+# 不新开旁路（见 cmd_refresh：先 fetch 再按 final_url 选解析器）。
+NEWSNOW_HOST = "newsnow.busiyi.world"
+NEWSNOW_PATH = "/api/s"
+NEWSNOW_MAX_ITEMS = 20  # 热榜 items 常见 30+，每源只取前 20
+NEWSNOW_SOURCE_NAMES = {
+    "weibo": "微博热搜",
+    "zhihu": "知乎热榜",
+    "bilibili-hot-search": "B站热搜",
+    "toutiao": "头条热榜",
+}
+
+
+def is_newsnow_url(url) -> bool:
+    """按 host + path 特征识别 NewsNow API URL。"""
+    try:
+        p = urllib.parse.urlsplit(str(url or "").strip())
+    except ValueError:
+        return False
+    return (p.hostname or "").lower() == NEWSNOW_HOST and p.path == NEWSNOW_PATH
+
+
+def newsnow_source_name(url) -> str:
+    """从 query 的 id 映射源名；非 NewsNow 或未登记的 id 返回空串。"""
+    if not is_newsnow_url(url):
+        return ""
+    try:
+        q = urllib.parse.parse_qs(urllib.parse.urlsplit(str(url).strip()).query)
+    except ValueError:
+        return ""
+    return NEWSNOW_SOURCE_NAMES.get((q.get("id") or [""])[0].strip(), "")
+
+
+def parse_newsnow(data: bytes):
+    """NewsNow JSON -> 与 parse_feed 同构的 item 列表（title/url/ts/summary）。
+
+    响应形如 {"status":"cache","id":"weibo","updatedTime":<ms>,"items":[{id,title,url,...}]}。
+    解析保持宽容：顶层时间戳缺失记 0，条目缺 title/url 直接跳过，extra 里能捞到摘要就用。
+    """
+    try:
+        doc = json.loads(data.decode("utf-8", errors="replace"))
+    except Exception as e:
+        raise ValueError(f"newsnow json parse failed: {str(e)[:100]}")
+    if not isinstance(doc, dict):
+        raise ValueError("newsnow response is not an object")
+    ts = 0
+    raw_ts = doc.get("updatedTime")
+    if isinstance(raw_ts, (int, float)):
+        ts = int(raw_ts // 1000)
+    elif isinstance(raw_ts, str) and raw_ts.strip().isdigit():
+        ts = int(int(raw_ts.strip()) // 1000)
+    raw_items = doc.get("items")
+    if not isinstance(raw_items, list):
+        return []
+    items = []
+    for it in raw_items[:NEWSNOW_MAX_ITEMS]:
+        if not isinstance(it, dict):
+            continue
+        title = clean_text(it.get("title"))
+        link = str(it.get("url") or "").strip()
+        if not title or not link:
+            continue
+        summary = ""
+        extra = it.get("extra")
+        if isinstance(extra, dict):
+            summary = clean_text(extra.get("hover") or extra.get("h3") or "")[:280]
+        items.append({"title": title[:200], "url": link, "ts": ts, "summary": summary})
+    return items
+
+
 # ---------------------------------------------------------------- cache
 
 def cache_files(lang="zh"):
@@ -400,10 +472,12 @@ def cmd_refresh(config_path, lang="zh"):
     source_status = []
 
     for feed in feeds:
-        name = feed["name"] or urllib.parse.urlsplit(feed["url"]).netloc
+        name = (feed["name"] or newsnow_source_name(feed["url"])
+                or urllib.parse.urlsplit(feed["url"]).netloc)
         try:
             data, final_url = fetch_with_redirects(feed["url"])
-            items = parse_feed(data)
+            # 按实际落地 URL 选解析器：NewsNow 走 JSON，其余走原 RSS/Atom 路径
+            items = parse_newsnow(data) if is_newsnow_url(final_url) else parse_feed(data)
             ok = len(items) > 0
             err = "" if ok else "no items"
         except Exception as e:

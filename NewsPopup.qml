@@ -173,7 +173,7 @@ PopupWindow {
 
   // 进入设置视图：拉一次源列表，并把当前配置镜像进控件
   function enterSettings() {
-    root.settingsMode = true
+    root.settingsMode = true; console.warn("[NW] ENTER SETTINGS")
     root.feedsStatus = ""
     root.translateStatus = ""
     root.feedsListRequested(root.lang)
@@ -219,6 +219,7 @@ PopupWindow {
   function toggle() { root.open = !root.open }
 
   onOpenChanged: {
+    console.warn("[NW] popup open=" + open + " bar=" + (!!bar))
     if (!bar) return
     if (open) bar.requestPopout(coordinatorKey)
     else if (bar.activePopout === coordinatorKey) bar.releasePopout(coordinatorKey)
@@ -518,7 +519,11 @@ PopupWindow {
         onVisibleChanged: if (visible) contentY = 0
         // 切语言时列表内容整体换掉（弹窗保持打开，visible 不变，不会触发上面的重置），
         // 显式归零，避免视口停在新列表的旧偏移位置。
-        onLangChanged: contentY = 0
+        // 注意：Flickable 自身没有 lang 属性，必须监听 root.lang。
+        Connections {
+          target: root
+          function onLangChanged() { flick.contentY = 0 }
+        }
 
         Column {
           id: listContent
@@ -730,7 +735,7 @@ PopupWindow {
                     checked: !!(modelData && modelData.enabled)
                     foreground: root.fg
                     accent: root.accent
-                    onToggled: root.toggleFeed(modelData.id, !checked)
+                    onToggled: { console.warn("[NW] feed toggle id=" + modelData.id + " -> " + (!checked)); root.toggleFeed(modelData.id, !checked) }
                   }
 
                   Column {
@@ -880,7 +885,8 @@ PopupWindow {
                 checked: !!root.cfgTranslate("enabled", false)
                 foreground: root.fg
                 accent: root.accent
-                onToggled: root.sendConfig({ translate: { enabled: !checked } })
+                onHovered: function(h) { console.warn("[NW] trSwitch hover=" + h) }
+                onToggled: { console.warn("[NW] translate toggle -> " + (!checked)); root.sendConfig({ translate: { enabled: !checked } }) }
               }
               Text {
                 width: parent.width - trSwitch.width - parent.spacing
@@ -1045,7 +1051,7 @@ PopupWindow {
                   checked: !!root.cfgGet(modelData.key, false)
                   foreground: root.fg
                   accent: root.accent
-                  onToggled: { var o = {}; o[modelData.key] = !checked; root.sendConfig(o) }
+                  onToggled: { console.warn("[NW] misc toggle " + modelData.key + " -> " + (!checked)); var o = {}; o[modelData.key] = !checked; root.sendConfig(o) }
                 }
                 Text {
                   text: modelData.label
