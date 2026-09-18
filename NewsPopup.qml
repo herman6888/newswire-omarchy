@@ -730,7 +730,7 @@ PopupWindow {
                     checked: !!(modelData && modelData.enabled)
                     foreground: root.fg
                     accent: root.accent
-                    onToggled: root.toggleFeed(modelData.id, checked)
+                    onToggled: root.toggleFeed(modelData.id, !checked)
                   }
 
                   Column {
@@ -880,7 +880,7 @@ PopupWindow {
                 checked: !!root.cfgTranslate("enabled", false)
                 foreground: root.fg
                 accent: root.accent
-                onToggled: root.sendConfig({ translate: { enabled: checked } })
+                onToggled: root.sendConfig({ translate: { enabled: !checked } })
               }
               Text {
                 width: parent.width - trSwitch.width - parent.spacing
@@ -1045,7 +1045,7 @@ PopupWindow {
                   checked: !!root.cfgGet(modelData.key, false)
                   foreground: root.fg
                   accent: root.accent
-                  onToggled: { var o = {}; o[modelData.key] = checked; root.sendConfig(o) }
+                  onToggled: { var o = {}; o[modelData.key] = !checked; root.sendConfig(o) }
                 }
                 Text {
                   text: modelData.label
