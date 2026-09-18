@@ -98,6 +98,8 @@ Item {
   property real tx: 0
   property bool hovering: false
   readonly property bool paused: scrollPaused || (hovering && pauseOnHover)
+  // 跑马灯模式：短标题也滚动（从右侧入场滚出左侧），而不是居中轮播
+  readonly property bool alwaysScroll: boolv("alwaysScroll", false)
 
   // T3 Bug2：滚动判定与自适应宽度解耦。
   // 旧写法 running = implicitWidth > tickerClip.width，而 clip 宽度本身 = clamp(implicitWidth + pad)，
@@ -165,13 +167,19 @@ Item {
 
   function resetScroll() {
     var w = tickerText.implicitWidth
+    if (root.alwaysScroll) {
+      // 跑马灯：从可视区右缘入场，向左滚出
+      root.tx = tickerClip.width
+      tickerText.x = root.tx
+      return
+    }
     // 短标题（比可视区窄）立即居中，不依赖滚动 Timer（Timer 对短标题不启动）
     root.tx = (w > 0 && w <= tickerClip.width) ? (tickerClip.width - w) / 2 : tickerClip.width
     tickerText.x = root.tx
     // 文本布局可能尚未完成，稍后再保证一次可见
     Qt.callLater(function () {
       var w2 = tickerText.implicitWidth
-      if (w2 > 0 && w2 <= tickerClip.width) {
+      if (!root.alwaysScroll && w2 > 0 && w2 <= tickerClip.width) {
         root.tx = (tickerClip.width - w2) / 2
         tickerText.x = root.tx
       }
@@ -182,7 +190,7 @@ Item {
     if (paused) return
     if (root.articles.length === 0) return
     var w = tickerText.implicitWidth
-    if (w <= tickerClip.width) {
+    if (!root.alwaysScroll && w <= tickerClip.width) {
       tickerText.x = (tickerClip.width - w) / 2
       return
     }
@@ -537,7 +545,7 @@ Item {
   Timer {
     id: scrollTimer
     interval: root.stepMs
-    running: root.tickerActive && !root.textFitsViewport
+    running: root.tickerActive && (root.alwaysScroll || !root.textFitsViewport)
     repeat: true
     onTriggered: root.step()
   }
@@ -546,7 +554,7 @@ Item {
   Timer {
     id: dwellTimer
     interval: root.rotateDwellSec * 1000
-    running: root.tickerActive && root.textFitsViewport && !root.paused
+    running: root.tickerActive && !root.alwaysScroll && root.textFitsViewport && !root.paused
     repeat: true
     onTriggered: root.next()
   }

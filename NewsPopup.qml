@@ -39,6 +39,7 @@ PopupWindow {
     refreshing: "Refreshing…",
     refresh: "Refresh",
     emptyList: "No items — hit Refresh",
+    emptyListFiltered: "No items from this source",
     loadingList: "Fetching news…",
     settings: "Settings",
     back: "Back",
@@ -59,11 +60,13 @@ PopupWindow {
     sTest: "Test",
     sMisc: "MISCELLANEOUS",
     sPaused: "Pause scrolling",
+    sAlwaysScroll: "Always scroll (marquee, even short headlines)",
     sPauseOnHover: "Pause on hover (default on: mouse over the bar stops scrolling)",
     sShowSource: "Show source",
     sShowAge: "Show relative time",
     sFontSize: "Font size",
     sFeedOk: "ok",
+    srcAll: "All",
     sFeedEmpty: "\u2717 no items / parse failed",
   } : {
     title: "中文快讯",
@@ -72,6 +75,7 @@ PopupWindow {
     refreshing: "刷新中…",
     refresh: "刷新",
     emptyList: "暂无内容，点右上角刷新",
+    emptyListFiltered: "该来源暂无内容",
     loadingList: "正在抓取资讯…",
     settings: "设置",
     back: "返回",
@@ -92,13 +96,21 @@ PopupWindow {
     sTest: "测试",
     sMisc: "其它",
     sPaused: "暂停滚动",
+    sAlwaysScroll: "始终滚动（跑马灯，短标题也滚）",
     sPauseOnHover: "鼠标悬停暂停（默认开：鼠标停在标题条上会停滚）",
     sShowSource: "显示来源",
     sShowAge: "显示相对时间",
     sFontSize: "字号",
     sFeedOk: "正常",
+    srcAll: "全部",
     sFeedEmpty: "✗ 无内容/解析失败",
   }
+
+  // ---- 来源过滤（点源状态块切换；空 = 全部）----
+  property string sourceFilter: ""
+  readonly property var visibleArticles: sourceFilter === ""
+    ? articles
+    : (articles || []).filter(function (a) { return a && a.source === sourceFilter })
 
   signal refreshRequested()
   signal openRequested(string url)
@@ -449,28 +461,39 @@ PopupWindow {
         }
       }
 
-      // ---- 源状态（设置视图隐藏）----
+  // ---- 源状态（设置视图隐藏；可点击 = 按来源过滤，再点取消）----
       Flow {
         width: parent.width
         spacing: 6
         visible: !root.settingsMode && root.sources.length > 0
         Repeater {
-          model: root.sources
+          model: [{ name: root.loc.srcAll, ok: true, all: true }].concat(root.sources)
           delegate: Rectangle {
             required property var modelData
+            readonly property bool isAll: modelData.all === true
+            readonly property bool active: isAll ? root.sourceFilter === ""
+                                               : root.sourceFilter === modelData.name
             width: srcTxt.implicitWidth + 12
             height: 20
             radius: 0
-            color: Qt.alpha(modelData.ok ? root.accent : root.urgent, 0.12)
-            border.color: Qt.alpha(modelData.ok ? root.accent : root.urgent, 0.4)
+            color: active ? Qt.alpha(root.accent, 0.35)
+                         : Qt.alpha(modelData.ok ? root.accent : root.urgent, 0.12)
+            border.color: active ? root.accent
+                                : Qt.alpha(modelData.ok ? root.accent : root.urgent, 0.4)
             border.width: 1
             Text {
               id: srcTxt
               anchors.centerIn: parent
-              text: modelData.name + (modelData.ok ? "" : " ✕")
-              color: modelData.ok ? root.fg : root.urgent
+              text: modelData.name + (isAll || modelData.ok ? "" : " ✕")
+              color: active ? root.fg : (modelData.ok ? root.fg : root.urgent)
               font.family: root.uiFont
               font.pixelSize: 11
+              font.bold: active
+            }
+            MouseArea {
+              anchors.fill: parent
+              cursorShape: Qt.PointingHandCursor
+              onClicked: root.sourceFilter = active || isAll ? "" : modelData.name
             }
           }
         }
@@ -531,9 +554,10 @@ PopupWindow {
           spacing: 2
 
           Text {
-            visible: root.articles.length === 0
+            visible: root.visibleArticles.length === 0
             width: parent.width
-            text: root.refreshing ? root.loc.loadingList : root.loc.emptyList
+            text: root.refreshing ? root.loc.loadingList
+                 : (root.sourceFilter !== "" ? root.loc.emptyListFiltered : root.loc.emptyList)
             color: root.safeMuted
             font.family: root.uiFont
             font.pixelSize: 13
@@ -543,7 +567,7 @@ PopupWindow {
           }
 
           Repeater {
-            model: root.articles
+            model: root.visibleArticles
             delegate: Rectangle {
               required property var modelData
               width: listContent.width
@@ -1036,6 +1060,7 @@ PopupWindow {
             Repeater {
               model: [
                 { key: "paused", label: root.loc.sPaused },
+                { key: "alwaysScroll", label: root.loc.sAlwaysScroll },
                 { key: "pauseOnHover", label: root.loc.sPauseOnHover },
                 { key: "showSource", label: root.loc.sShowSource },
                 { key: "showAge", label: root.loc.sShowAge }
