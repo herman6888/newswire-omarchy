@@ -931,7 +931,7 @@ PopupWindow {
               font.family: root.uiFont
               font.pixelSize: 10
             }
-            SearchableDropdown {
+            LanguageDropdown {
               id: trTargetDropdown
               label: ""
               showLabel: false
@@ -948,7 +948,7 @@ PopupWindow {
                 { value: "ru", label: "Русский (ru)" },
                 { value: "pt", label: "Português (pt)" },
                 { value: "it", label: "Italiano (it)" },
-                { value: "ar", label: "‪العربية (ar)" },
+                { value: "ar", label: "Arabic · العربية (ar)" },
                 { value: "vi", label: "Tiếng Việt (vi)" },
                 { value: "th", label: "ไทย (th)" },
                 { value: "id", label: "Bahasa Indonesia (id)" },
