@@ -931,12 +931,36 @@ PopupWindow {
               font.family: root.uiFont
               font.pixelSize: 10
             }
-            ButtonGroup {
-              id: trTargetGroup
-              options: [{ value: "zh", label: "中文" }, { value: "en", label: "English" }]
+            SearchableDropdown {
+              id: trTargetDropdown
+              label: ""
+              showLabel: false
+              placeholderText: root.isEn ? "Search language…" : "搜索语言…"
+              emptyText: root.isEn ? "No matches" : "无匹配"
+              options: [
+                { value: "zh", label: "简体中文 (zh)" },
+                { value: "en", label: "English (en)" },
+                { value: "ja", label: "日本語 (ja)" },
+                { value: "ko", label: "한국어 (ko)" },
+                { value: "fr", label: "Français (fr)" },
+                { value: "de", label: "Deutsch (de)" },
+                { value: "es", label: "Español (es)" },
+                { value: "ru", label: "Русский (ru)" },
+                { value: "pt", label: "Português (pt)" },
+                { value: "it", label: "Italiano (it)" },
+                { value: "ar", label: "العربية (ar)" },
+                { value: "vi", label: "Tiếng Việt (vi)" },
+                { value: "th", label: "ไทย (th)" },
+                { value: "id", label: "Bahasa Indonesia (id)" },
+                { value: "hi", label: "हिन्दी (hi)" },
+                { value: "tr", label: "Türkçe (tr)" },
+                { value: "nl", label: "Nederlands (nl)" },
+                { value: "pl", label: "Polski (pl)" },
+                { value: "uk", label: "Українська (uk)" },
+                { value: "ms", label: "Bahasa Melayu (ms)" }
+              ]
               value: String(root.cfgTranslate("targetLang", "zh"))
               fontFamily: root.uiFont
-              fontSize: 12
               foreground: root.fg
               background: root.bg
               accent: root.accent

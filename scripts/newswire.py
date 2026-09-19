@@ -77,7 +77,32 @@ CONFIG_DEFAULTS = {
     },
 }
 # 支持的译文目标（新增语言时在这里登记 + 补 _TRANSLATE_SYSTEM）
-TRANSLATE_TARGETS = ("zh", "en")
+# cjk=True 的语言：已是 CJK 的标题跳过不译；其余语言：含 CJK 的标题必译，
+# 纯拉丁标题在非英目标下也译（缓存去重，预算兜底）。
+TRANSLATE_LANGS = (
+    {"code": "zh", "cjk": True},
+    {"code": "en", "cjk": False},
+    {"code": "ja", "cjk": True},
+    {"code": "ko", "cjk": True},
+    {"code": "fr", "cjk": False},
+    {"code": "de", "cjk": False},
+    {"code": "es", "cjk": False},
+    {"code": "ru", "cjk": False},
+    {"code": "pt", "cjk": False},
+    {"code": "it", "cjk": False},
+    {"code": "ar", "cjk": False},
+    {"code": "vi", "cjk": False},
+    {"code": "th", "cjk": False},
+    {"code": "id", "cjk": False},
+    {"code": "hi", "cjk": False},
+    {"code": "tr", "cjk": False},
+    {"code": "nl", "cjk": False},
+    {"code": "pl", "cjk": False},
+    {"code": "uk", "cjk": False},
+    {"code": "ms", "cjk": False},
+)
+TRANSLATE_TARGETS = tuple(l["code"] for l in TRANSLATE_LANGS)
+_LANG_CJK = {l["code"]: l["cjk"] for l in TRANSLATE_LANGS}
 TRANSLATE_TIMEOUT = 30.0    # 单请求上限；实测本网关 zh→en 约 24.5s，15s 会超时
 TRANSLATE_BATCH = 3          # 每次请求打包的标题数（本地网关 ~2.2s/条，3 条 ≈ 7s）
 TRANSLATE_MAX_BATCHES = 8   # 上限保护；实际由 TRANSLATE_BUDGET 提前截断
@@ -841,22 +866,33 @@ def translate_base_blocked(base_url: str) -> bool:
     return any(ip in net for net in _TRANSLATE_BLOCKED_NETS)
 
 
-_TRANSLATE_SYSTEM = {
-    "zh": "你是新闻标题翻译引擎。把每条英文标题翻译成简洁的简体中文新闻标题。"
-          "只输出译文，每行一条，行号与输入一一对应，不要编号、不要解释、不要引号。",
-    "en": "You are a news-headline translation engine. Translate each Chinese headline "
-          "into a concise, natural English news headline. "
-          "Output only the translation, one per line, line-for-line with the input; "
-          "no numbering, no explanation, no quotes.",
-}
+def _translate_system(tgt: str) -> str:
+    if tgt == "zh":
+        return ("你是新闻标题翻译引擎。把每条标题翻译成简洁的简体中文新闻标题。"
+                "只输出译文，每行一条，行号与输入一一对应，不要编号、不要解释、不要引号。")
+    if tgt == "en":
+        return ("You are a news-headline translation engine. Translate each Chinese headline "
+                "into a concise, natural English news headline. "
+                "Output only the translation, one per line, line-for-line with the input; "
+                "no numbering, no explanation, no quotes.")
+    return (f"You are a news-headline translation engine. Translate each headline "
+            f"into {tgt.upper()}. Output only the translation, one per line, "
+            f"line-for-line with the input; no numbering, no explanation, no quotes.")
 
 
 def title_needs_translation(s: str, tgt: str) -> bool:
-    """zh 目标：跳过已是中文的标题；en 目标：只翻含中文的标题。"""
+    """zh 目标：跳过已是 CJK 的标题（原行为）。
+    ja/ko 目标：只译含拉丁字母的标题（纯 CJK 无法廉价区分中日韩，跳过省预算）。
+    非 CJK 目标：含 CJK 的必译；纯拉丁标题仅在目标不是 en 时译（避免英→英空转）。"""
     if not s:
         return False
     has_cjk = bool(_CJK_RE.search(s))
-    return (not has_cjk) if tgt == "zh" else has_cjk
+    has_latin = bool(re.search(r"[A-Za-z]", s))
+    if tgt == "zh":
+        return not has_cjk
+    if tgt in ("ja", "ko"):
+        return has_latin
+    return has_cjk or (tgt != "en" and has_latin)
 
 
 def translate_titles(titles, tr_cfg, budget=None):
@@ -894,7 +930,7 @@ def translate_titles(titles, tr_cfg, budget=None):
             "model": tr_cfg.get("model") or "",
             "temperature": 0,
             "messages": [
-                {"role": "system", "content": _TRANSLATE_SYSTEM[tgt]},
+                {"role": "system", "content": _translate_system(tgt)},
                 {"role": "user", "content": numbered},
             ],
         }
