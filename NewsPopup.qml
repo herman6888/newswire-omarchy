@@ -65,6 +65,7 @@ PopupWindow {
     sShowSource: "Show source",
     sShowAge: "Show relative time",
     sFontSize: "Font size",
+    sTickerWidth: "Ticker width",
     sFeedOk: "ok",
     srcAll: "All",
     sFeedEmpty: "\u2717 no items / parse failed",
@@ -101,6 +102,7 @@ PopupWindow {
     sShowSource: "显示来源",
     sShowAge: "显示相对时间",
     sFontSize: "字号",
+    sTickerWidth: "滚动区宽度",
     sFeedOk: "正常",
     srcAll: "全部",
     sFeedEmpty: "✗ 无内容/解析失败",
@@ -1113,6 +1115,38 @@ PopupWindow {
               Text {
                 id: fontValText
                 text: String(Math.max(9, Math.min(20, Math.round(Number(root.cfgGet("textPixelSize", 13))) || 13)))
+                color: root.safeMuted
+                font.family: root.uiFont
+                font.pixelSize: 11
+                anchors.verticalCenter: parent.verticalCenter
+              }
+            }
+
+            Row {
+              width: parent.width
+              spacing: 8
+              Text {
+                text: root.loc.sTickerWidth
+                color: root.fg
+                font.family: root.uiFont
+                font.pixelSize: 11
+                anchors.verticalCenter: parent.verticalCenter
+              }
+              PanelSlider {
+                id: tickerWSlider
+                width: parent.width - tickerWValText.width - parent.spacing * 2 - 8
+                minimum: 160
+                maximum: 1200
+                step: 20
+                integer: true
+                value: Math.max(160, Math.min(1200, Math.round(Number(root.cfgGet("tickerMaxWidth", 520))) || 520))
+                anchors.verticalCenter: parent.verticalCenter
+                onReleased: function (v) { root.sendConfig({ tickerMaxWidth: Math.round(v) }) }
+                onMoved: function (v) { tickerWValText.text = String(Math.round(v)) + "px" }
+              }
+              Text {
+                id: tickerWValText
+                text: String(Math.max(160, Math.min(1200, Math.round(Number(root.cfgGet("tickerMaxWidth", 520))) || 520))) + "px"
                 color: root.safeMuted
                 font.family: root.uiFont
                 font.pixelSize: 11
