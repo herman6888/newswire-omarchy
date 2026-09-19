@@ -578,7 +578,10 @@ Item {
   Item {
     id: tickerClip
     anchors.verticalCenter: parent.verticalCenter
-    x: root._iconRight ? 0 : newsIcon.width + root.gap
+    // iconRight（在 clock 左侧）：clip 右对齐贴紧图标左侧，ticker 向左扩；
+    // 否则图标在左，clip 紧跟图标右侧。
+    x: root._iconRight ? (newsIcon.x - root.gap - tickerClip.width)
+                      : (newsIcon.width + root.gap)
     // 固定宽度 = min(设定上限, 当前布局方向的动态边界)：不随标题长度变化。
     // _iconRight（在 clock 左侧）→ 由 leftAvail 封顶，向右被 clock 钉死无需右边界；
     // 否则（在 clock 右侧）→ 由 rightAvail 封顶（tray「<」不被遮挡）。
