@@ -432,11 +432,18 @@ Item {
 
   // ---- 视觉 ----
 
+  // 布局随锚点位置自适应：
+  //  - newswire 在 clock 右侧（默认）：[📰][ticker→] 图标在左
+  //  - newswire 在 clock 左侧：[ticker←][📰] 图标贴右（挨着时钟），ticker 向左扩
+  // _iconRight 由 recomputeLeftAvail 判定（widget 右缘在屏幕中线左侧）。
+  property bool _iconRight: false
+
   // 📰 图标（纯展示）。语言切换按钮已按需求从 bar 移到弹窗头部，所以这里不再注册
   // 独立 clickTarget，也不定义 triggerPress —— bar 会落回 widget 根 triggerPress（弹弹窗）。
   Item {
     id: newsIcon
     anchors.verticalCenter: parent.verticalCenter
+    x: root._iconRight ? parent.width - width : 0
     width: newsIconLabel.implicitWidth + 12
     height: parent.height
 
@@ -449,6 +456,69 @@ Item {
     }
   }
 
+  // ---- 动态左边界（newswire 位于 clock 锚点左侧时）----
+  // clock 居中锚定，newswire 在锚点左边 → widget 右缘被钉死在 clock.left，
+  // ticker 只能向左扩。可用宽度 = widget右缘 - 左区右缘 - 图标/间距。
+  // 左区（menu/workspaces/stash）变宽 → 右缘右移 → ticker 自动收窄，互不遮挡。
+  // 注：widget 右缘用 selfX + root.width 表达；tickerClip 变宽会把整个 center
+  // 组往左推，selfX 等量减小，两者之和恒定 → 不会自激振荡。
+  property real leftAvail: Infinity
+
+  // 跳过自身子树（否则会把 tickerClip 自己当成边界）
+  function inOurSubtree(c) {
+    var p = c
+    while (p) {
+      if (p === root) return true
+      p = p.parent
+    }
+    return false
+  }
+
+  function findLeftSectionRight(item, parent, cw, depth) {
+    if (!item || !parent || depth > 6) return -Infinity
+    var best = -Infinity
+    var kids = item.children || []
+    for (var i = 0; i < kids.length; i++) {
+      var c = kids[i]
+      if (!c || !c.visible || c.width <= 0 || root.inOurSubtree(c)) continue
+      // 坐标换算到窗口空间再判断（左区元素可能嵌套在 center 组里）
+      var mx = c.mapToItem(parent, 0, 0).x
+      var mRight = mx + c.width
+      // 左锚定特征：左缘贴内容区左缘、位于半屏左侧、非全宽背景
+      if (mx <= 12 && mRight < cw * 0.5 && c.width < cw * 0.9) {
+        if (mRight > best) best = mRight
+      } else if (depth < 6) {
+        var sub = findLeftSectionRight(c, parent, cw, depth + 1)
+        if (sub > best) best = sub
+      }
+    }
+    return best
+  }
+
+  function recomputeLeftAvail() {
+    var win = root.QsWindow ? root.QsWindow.window : null
+    if (!win || !win.contentItem) return
+    var cw = win.contentItem.width
+    if (cw <= 0) return
+    var leftSecRight = findLeftSectionRight(win.contentItem, win.contentItem, cw, 0)
+    if (leftSecRight === -Infinity) return
+
+    var selfX = root.mapToItem(win.contentItem, 0, 0).x
+    var widgetRight = selfX + root.width
+    // 图标朝向：widget 起点在屏幕中线左侧 → 贴 clock 左侧，图标翻到右边
+    var iconRight = selfX < cw * 0.5
+    if (root._iconRight !== iconRight) root._iconRight = iconRight
+    var avail = Math.max(root.tickerMinWidth,
+                        widgetRight - leftSecRight - newsIcon.width
+                        - root.gap - root.rightGap - 8)
+    if (Math.abs(avail - root.leftAvail) > 1) {
+      console.warn("[NW] leftAvail=" + avail.toFixed(0)
+                  + " (leftSecRight=" + leftSecRight.toFixed(0)
+                  + " widgetRight=" + widgetRight.toFixed(0) + " cw=" + cw + ")")
+      root.leftAvail = avail
+    }
+  }
+
   // ---- 动态右边界 ----
   // center 区整体居中：ticker 变宽会把整条 center 行往左推（更新图标抖动），
   // 太宽时右端盖住 right 区的 tray「<」。第三方 widget 拿到的 bar facade 不暴露
@@ -457,19 +527,21 @@ Item {
   // tray 悬停展开 → right 区变宽 → 左缘左移 → ticker 自动收窄。
   property real rightAvail: Infinity
 
-  function findRightSectionLeft(item, cw, depth) {
-    if (!item || depth > 4) return Infinity
+  function findRightSectionLeft(item, parent, cw, depth) {
+    if (!item || !parent || depth > 6) return Infinity
     var best = Infinity
     var kids = item.children || []
     for (var i = 0; i < kids.length; i++) {
       var c = kids[i]
-      if (!c || !c.visible || c.width <= 0) continue
-      var rightEdge = c.x + c.width
+      if (!c || !c.visible || c.width <= 0 || root.inOurSubtree(c)) continue
+      // 坐标换算到窗口空间再判断
+      var mx = c.mapToItem(parent, 0, 0).x
+      var rightEdge = mx + c.width
       // 右锚定特征：右缘贴内容区右缘、起点在半屏右侧、不是全宽背景
-      if (rightEdge >= cw - 12 && c.x > cw * 0.5 && c.width < cw * 0.9) {
-        if (c.x < best) best = c.x
-      } else if (depth < 4) {
-        var sub = findRightSectionLeft(c, cw, depth + 1)
+      if (rightEdge >= cw - 12 && mx > cw * 0.5 && c.width < cw * 0.9) {
+        if (mx < best) best = mx
+      } else if (depth < 6) {
+        var sub = findRightSectionLeft(c, parent, cw, depth + 1)
         if (sub < best) best = sub
       }
     }
@@ -481,7 +553,7 @@ Item {
     if (!win || !win.contentItem) { console.warn("[NW] rAvail: no win/contentItem"); return }
     var cw = win.contentItem.width
     if (cw <= 0) { console.warn("[NW] rAvail: cw=0"); return }
-    var minX = findRightSectionLeft(win.contentItem, cw, 0)
+    var minX = findRightSectionLeft(win.contentItem, win.contentItem, cw, 0)
     if (minX === Infinity) return
 
     // ticker 起点（窗口坐标）= widget 自身 x + 图标 + 间距；再留 8px 呼吸位
@@ -499,17 +571,19 @@ Item {
     interval: 300
     running: !root.vertical && !!root.bar
     repeat: true
-    onTriggered: root.recomputeRightAvail()
+    onTriggered: { root.recomputeRightAvail(); root.recomputeLeftAvail() }
   }
 
   // 自适应宽度滚动区
   Item {
     id: tickerClip
     anchors.verticalCenter: parent.verticalCenter
-    x: newsIcon.width + root.gap
-    // 固定宽度 = min(设定上限, 动态可用)：不随标题长度变化，center 行不再抖动；
-    // 且永不超过 right 区左缘（tray「<」/更新图标不被遮挡，展开时自动收窄）
-    width: root.vertical ? 0 : Math.min(root.tickerMaxWidth, root.rightAvail)
+    x: root._iconRight ? 0 : newsIcon.width + root.gap
+    // 固定宽度 = min(设定上限, 当前布局方向的动态边界)：不随标题长度变化。
+    // _iconRight（在 clock 左侧）→ 由 leftAvail 封顶，向右被 clock 钉死无需右边界；
+    // 否则（在 clock 右侧）→ 由 rightAvail 封顶（tray「<」不被遮挡）。
+    width: root.vertical ? 0 : Math.min(root.tickerMaxWidth,
+                                       root._iconRight ? root.leftAvail : root.rightAvail)
     height: parent.height
     clip: true
     Behavior on width { NumberAnimation { duration: 180; easing.type: Easing.OutCubic } }
