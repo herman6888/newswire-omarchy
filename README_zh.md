@@ -34,7 +34,7 @@
 ## 安装
 
 ```bash
-omarchy plugin add https://github.com/<you>/omarchy-newswire-zh.git
+omarchy plugin add https://github.com/herman6888/newswire-omarchy.git
 omarchy plugin enable herman.newswire-zh center
 ```
 
@@ -42,6 +42,15 @@ omarchy plugin enable herman.newswire-zh center
 保存即热重载。
 
 需要 PATH 里有 `python3`（仅标准库，无需 pip 安装任何包）。
+
+## 卸载
+
+```bash
+omarchy plugin disable herman.newswire-zh
+rm -rf ~/.config/omarchy/plugins/herman.newswire-zh
+# 可选：一并清除设置与缓存
+rm -rf ~/.config/omarchy-newswire-zh ~/.cache/omarchy-newswire-zh
+```
 
 ## 配置
 

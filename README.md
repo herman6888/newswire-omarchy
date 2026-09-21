@@ -41,7 +41,7 @@ rebuilt for Omarchy with Chinese + English content sources.
 ## Install
 
 ```bash
-omarchy plugin add https://github.com/<you>/omarchy-newswire-zh.git
+omarchy plugin add https://github.com/herman6888/newswire-omarchy.git
 omarchy plugin enable herman.newswire-zh center
 ```
 
@@ -49,6 +49,15 @@ Or manually: clone this repo into `~/.config/omarchy/plugins/herman.newswire-zh/
 — the shell hot-reloads on save.
 
 Requires `python3` on PATH (stdlib only, no pip packages needed).
+
+## Uninstall
+
+```bash
+omarchy plugin disable herman.newswire-zh
+rm -rf ~/.config/omarchy/plugins/herman.newswire-zh
+# optional: also remove your settings and caches
+rm -rf ~/.config/omarchy-newswire-zh ~/.cache/omarchy-newswire-zh
+```
 
 ## Configuration
 
