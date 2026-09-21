@@ -3,22 +3,22 @@
   "zh": [
     {
       "name": "微博热搜",
-      "url": "https://newsnow.busiyi.world/api/s?id=weibo",
+      "url": "https://60s.viki.moe/v2/weibo",
       "enabled": true
     },
     {
       "name": "知乎热榜",
-      "url": "https://newsnow.busiyi.world/api/s?id=zhihu",
+      "url": "https://api.zhihu.com/topstory/hot-list?limit=30",
       "enabled": true
     },
     {
       "name": "B站热搜",
-      "url": "https://newsnow.busiyi.world/api/s?id=bilibili-hot-search",
+      "url": "https://app.bilibili.com/x/v2/search/trending/ranking?limit=30",
       "enabled": true
     },
     {
       "name": "头条热榜",
-      "url": "https://newsnow.busiyi.world/api/s?id=toutiao",
+      "url": "https://60s.viki.moe/v2/toutiao",
       "enabled": true
     },
     {
