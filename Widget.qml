@@ -85,6 +85,21 @@ Item {
   readonly property url scriptUrl: Qt.resolvedUrl("scripts/newswire.py")
   readonly property string scriptPath: scriptUrl.toString().replace(/^file:\/\//, "")
 
+  // 固定解释器：root-owned 的 /usr/bin/python3，不走 PATH 查找。
+  // 配合每个 Process 的 clearEnvironment:true + 最小显式环境，杜绝继承的
+  // PYTHONPATH / LD_PRELOAD / LD_LIBRARY_PATH 等把普通轮询变成任意代码执行
+  // （reviewer HANCORE-linux @ marketplace#7958）。
+  readonly property string py: "/usr/bin/python3"
+  readonly property var pyEnv: ({
+    "HOME": Quickshell.env("HOME") || "/home/" + (Quickshell.env("USER") || ""),
+    "USER": Quickshell.env("USER") || "",
+    "PATH": "/usr/bin:/bin",
+    "LANG": "C.UTF-8",
+    "LC_ALL": "C.UTF-8",
+    "PYTHONNOUSERSITE": "1",
+    "PYTHONDONTWRITEBYTECODE": "1"
+  })
+
   // ---- 数据 ----
   property var articles: []
   property var sources: []
@@ -229,7 +244,7 @@ Item {
     var job = root.cmdQueue[0]
     root.cmdQueue = root.cmdQueue.slice(1)
     root.cmdTag = job.tag
-    scriptProc.command = ["/usr/bin/env", "python3", root.scriptPath].concat(job.args)
+    scriptProc.command = [root.py, root.scriptPath].concat(job.args)
     scriptProc.running = true
   }
 
@@ -270,6 +285,8 @@ Item {
 
   Process {
     id: scriptProc
+    clearEnvironment: true
+    environment: root.pyEnv
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: root.handleScriptResult(text)
@@ -343,15 +360,18 @@ Item {
 
   // ---- 进程 ----
 
-  // 启动时读取持久化语言
+  // 启动时读取持久化语言（走脚本子命令，固定解释器 + 清理环境）
   Process {
     id: langReadProc
-    command: ["/usr/bin/env", "python3", "-c",
-      "import json,os\ntry:\n print(json.load(open(os.path.expanduser('~/.cache/omarchy-newswire-zh/lang.json'))).get('lang',''))\nexcept Exception:\n print('')"]
+    command: [root.py, root.scriptPath, "lang", "get"]
+    clearEnvironment: true
+    environment: root.pyEnv
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
-        var l = (text || "").trim()
+        var data
+        try { data = JSON.parse(text || "{}") } catch (e) { data = null }
+        var l = (data && data.lang) ? String(data.lang) : ""
         root.langPersisted = (l === "en" || l === "zh")
         root.lang = root.langPersisted ? l : root.defaultLang
         Qt.callLater(function () {
@@ -368,21 +388,24 @@ Item {
   Process {
     id: langWriteProc
     property string arg: "zh"
-    command: ["/usr/bin/env", "python3", "-c",
-      "import json,os,sys\np=os.path.expanduser('~/.cache/omarchy-newswire-zh/lang.json')\nos.makedirs(os.path.dirname(p),exist_ok=True)\njson.dump({'lang':sys.argv[1]},open(p,'w'))", arg]
+    command: [root.py, root.scriptPath, "lang", "set", arg]
+    clearEnvironment: true
+    environment: root.pyEnv
   }
 
   // 已读列表（按语言分文件）
   Process {
     id: readProc
-    command: ["/usr/bin/env", "python3", "-c",
-      "import json,os\nf=os.path.expanduser('~/.cache/omarchy-newswire-zh/'+('read_en.json' if '" + root.lang + "'=='en' else 'read.json'))\nprint(json.dumps(json.load(open(f)) if os.path.exists(f) else []))"]
+    command: [root.py, root.scriptPath, "readlist", "--lang", root.lang]
+    clearEnvironment: true
+    environment: root.pyEnv
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
-        var ids
-        try { ids = JSON.parse(text || "[]") } catch (e) { ids = [] }
-        root.readIds = Array.isArray(ids) ? ids : []
+        var data
+        try { data = JSON.parse(text || "{}") } catch (e) { data = null }
+        var ids = (data && Array.isArray(data.ids)) ? data.ids : []
+        root.readIds = ids
         root.recomputeRead()
       }
     }
@@ -403,13 +426,17 @@ Item {
   Process {
     id: markProc
     property string arg: ""
-    command: ["/usr/bin/env", "python3", root.scriptPath, "markread", arg, "--lang", root.lang]
+    command: [root.py, root.scriptPath, "markread", arg, "--lang", root.lang]
+    clearEnvironment: true
+    environment: root.pyEnv
   }
 
   // 读缓存（无网络，毫秒级）
   Process {
     id: dumpProc
-    command: ["/usr/bin/env", "python3", root.scriptPath, "dump", "--lang", root.lang]
+    command: [root.py, root.scriptPath, "dump", "--lang", root.lang]
+    clearEnvironment: true
+    environment: root.pyEnv
     onRunningChanged: { if (running) dumpWatchdog.restart(); else dumpWatchdog.stop() }
     stdout: StdioCollector {
       waitForEnd: true
@@ -421,8 +448,9 @@ Item {
   // 抓网络（后台，可能几秒）
   Process {
     id: refreshProc
-    command: ["/usr/bin/env", "python3", root.scriptPath, "refresh", "--lang", root.lang]
-    onRunningChanged: { if (running) refreshWatchdog.restart(); else refreshWatchdog.stop() }
+    command: [root.py, root.scriptPath, "refresh", "--lang", root.lang]
+    clearEnvironment: true
+    environment: root.pyEnv
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: root.applyPayload(text, true)

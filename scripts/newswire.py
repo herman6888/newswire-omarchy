@@ -31,7 +31,9 @@ import ipaddress
 import json
 import os
 import re
+import secrets
 import socket
+import stat
 import sys
 import time
 import urllib.error
@@ -758,11 +760,8 @@ def load_cache(lang="zh"):
 
 def save_cache(cache, lang="zh"):
     cache_file, _ = cache_files(lang)
-    os.makedirs(CACHE_DIR, exist_ok=True)
-    tmp = cache_file + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(cache, f, ensure_ascii=False)
-    os.replace(tmp, cache_file)
+    _safe_write_json_at(get_secure_dir("cache"), os.path.basename(cache_file),
+                       cache, mode=0o644)
 
 
 def load_feeds(path, lang="zh"):
@@ -825,11 +824,8 @@ def cmd_markread(article_id, lang="zh"):
         read.append(article_id)
     # 防止无限增长：只保留最近 2000 条
     read = read[-2000:]
-    os.makedirs(CACHE_DIR, exist_ok=True)
-    tmp = read_file + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(read, f)
-    os.replace(tmp, read_file)
+    _safe_write_json_at(get_secure_dir("cache"), os.path.basename(read_file),
+                       read, mode=0o644)
     return {"read": len(read)}
 
 
@@ -932,18 +928,118 @@ def parse_lang(argv):
 
 
 # ---------------------------------------------------------------- atomic write
+# 安全模型（reviewer HANCORE-linux @ marketplace#7958）：
+# 含 API key 的配置不能用 "path + .tmp" 这种可预测路径 + 可被 symlink 劫持的
+# 中间目录组件来写。这里全程持有目录 fd：
+#   - 目录用 O_NOFOLLOW 打开，且校验 uid 属于当前用户、是真实目录（非 symlink）
+#   - 临时文件用 O_EXCL + 随机名创建，杜绝抢注/碰撞
+#   - 写完 fsync 文件 → rename 用 dir_fd 相对目录原子替换 → fsync 目录
+#   - 已存在的目标文件先校验：必须是普通文件、属主是自己、无硬链接，否则拒写
+# 任何一步失败都清理临时文件并抛异常，绝不落到劫持路径。
+
+def _open_dir_nofollow(path: str, create: bool = False):
+    """打开目录 fd：拒绝 symlink（O_NOFOLLOW），校验属主为当前 uid。"""
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | os.O_NOFOLLOW
+    while True:
+        try:
+            fd = os.open(path, flags)
+            break
+        except FileNotFoundError:
+            if not create:
+                raise
+            try:
+                os.mkdir(path, mode=0o700)
+            except FileExistsError:
+                pass
+            continue
+        except OSError as e:
+            # ELOOP = symlink；统一转成明确错误
+            raise RuntimeError(f"unsafe directory (symlink or missing): {path}") from e
+    st = os.fstat(fd)
+    if not stat.S_ISDIR(st.st_mode):
+        os.close(fd)
+        raise RuntimeError(f"not a directory: {path}")
+    if st.st_uid != os.getuid():
+        os.close(fd)
+        raise RuntimeError(f"directory not owned by us: {path}")
+    return fd
+
+
+def _safe_write_json_at(dir_fd: int, name: str, obj, mode: int = 0o600) -> None:
+    """在 dir_fd 内原子写 JSON（exclusive temp + fsync + renameat + fsync dir）。"""
+    tmp = f".{name}.{secrets.token_hex(8)}.tmp"
+    tmp_fd = None
+    try:
+        # O_EXCL：名字随机 + 独占创建，别人抢注即失败
+        tmp_fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                        mode, dir_fd=dir_fd)
+        data = json.dumps(obj, ensure_ascii=False, indent=2).encode("utf-8")
+        with os.fdopen(tmp_fd, "wb") as f:
+            tmp_fd = None
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        # 目标若已存在：校验是普通文件、属主是自己、无硬链接（防硬链接外泄）
+        try:
+            old = os.stat(name, dir_fd=dir_fd, follow_symlinks=False)
+            if not stat.S_ISREG(old.st_mode) or old.st_uid != os.getuid() \
+                    or old.st_nlink != 1:
+                raise RuntimeError(f"refusing to replace unsafe file: {name}")
+        except FileNotFoundError:
+            pass
+        os.rename(tmp, name, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+        os.fsync(dir_fd)
+    finally:
+        if tmp_fd is not None:
+            os.close(tmp_fd)
+        try:
+            os.unlink(tmp, dir_fd=dir_fd)
+        except FileNotFoundError:
+            pass
+
 
 def atomic_write_json(path, obj, mode=None) -> None:
-    """tmp + rename，避免写一半被读到。mode 指定文件权限（如 0o600 用于含密钥的配置）。"""
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(obj, f, ensure_ascii=False, indent=2)
-        f.flush()
-        os.fsync(f.fileno())
-    if mode is not None:
-        os.chmod(tmp, mode)
-    os.replace(tmp, path)
+    """兼容旧签名：拆 dirname/basename，走 fd-relative 安全写。"""
+    d, name = os.path.split(str(path))
+    if not d:
+        d = "."
+    fd = _open_dir_nofollow(d, create=True)
+    try:
+        _safe_write_json_at(fd, name, obj, mode if mode is not None else 0o600)
+    finally:
+        os.close(fd)
+
+
+def _read_json_at(dir_fd: int, name: str, limit: int = 8 * 1024 * 1024):
+    """在已校验的目录 fd 内做有界读取（no-follow）。失败返回 None。"""
+    try:
+        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=dir_fd)
+    except OSError:
+        return None
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or st.st_size > limit:
+            return None
+        with os.fdopen(fd, "rb") as f:
+            return json.loads(f.read(limit).decode("utf-8", errors="replace"))
+    except Exception:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        return None
+
+
+# 进程级缓存的目录 fd（config/cache 各一个，打开后不再重开 → 无 TOCTOU 窗口）
+_DIR_FDS = {}
+
+
+def get_secure_dir(kind: str) -> int:
+    """kind: 'config' | 'cache'。返回校验过的目录 fd（缓存复用）。"""
+    if kind not in _DIR_FDS:
+        path = CONFIG_DIR if kind == "config" else CACHE_DIR
+        _DIR_FDS[kind] = _open_dir_nofollow(path, create=True)
+    return _DIR_FDS[kind]
 
 
 def read_json_or(path, fallback):
@@ -1017,6 +1113,35 @@ def merge_config(user_cfg):
 
 def load_config():
     return merge_config(read_json_or(CONFIG_FILE, {}))
+
+
+def cmd_readlist(lang="zh"):
+    """读已读 id 列表（校验过的 cache 目录 fd 内，no-follow 有界读取）。"""
+    _, read_file = cache_files(lang)
+    d = _read_json_at(get_secure_dir("cache"), os.path.basename(read_file),
+                      limit=4 * 1024 * 1024)
+    ids = d if isinstance(d, list) else []
+    return {"ids": ids}
+
+
+def cmd_lang_get():
+    """读持久化语言（在已校验的 cache 目录 fd 内有界读取）。"""
+    d = _read_json_at(get_secure_dir("cache"), "lang.json", limit=4096)
+    lang = ""
+    if isinstance(d, dict):
+        v = str(d.get("lang") or "").strip().lower()
+        if v in ("zh", "en"):
+            lang = v
+    return {"lang": lang}
+
+
+def cmd_lang_set(raw: str):
+    v = (raw or "").strip().lower()
+    if v not in ("zh", "en"):
+        raise ValueError("lang must be zh or en")
+    _safe_write_json_at(get_secure_dir("cache"), "lang.json", {"lang": v},
+                       mode=0o644)
+    return {"ok": True, "lang": v}
 
 
 def cmd_config_get():
@@ -1450,6 +1575,14 @@ def main(argv):
             out = cmd_status(lang)
         elif cmd == "markread":
             out = cmd_markread(argv[2] if len(argv) > 2 else "", lang)
+        elif cmd == "readlist":
+            out = cmd_readlist(lang)
+        elif cmd == "lang":
+            sub = argv[2] if len(argv) > 2 else "get"
+            if sub == "set":
+                out = cmd_lang_set(argv[3] if len(argv) > 3 else "")
+            else:
+                out = cmd_lang_get()
         elif cmd == "config":
             sub = argv[2] if len(argv) > 2 else "get"
             if sub == "set":
