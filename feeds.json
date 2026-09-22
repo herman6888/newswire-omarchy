@@ -3,7 +3,7 @@
   "zh": [
     {
       "name": "微博热搜",
-      "url": "https://60s.viki.moe/v2/weibo",
+      "url": "https://uapis.cn/api/v1/misc/hotboard?type=weibo",
       "enabled": true
     },
     {
@@ -18,7 +18,7 @@
     },
     {
       "name": "头条热榜",
-      "url": "https://60s.viki.moe/v2/toutiao",
+      "url": "https://uapis.cn/api/v1/misc/hotboard?type=toutiao",
       "enabled": true
     },
     {

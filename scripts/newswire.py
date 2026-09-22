@@ -24,7 +24,9 @@ newswire.py — 中文资讯抓取引擎（零依赖，仅用 Python 标准库�
 """
 
 import copy
+import functools
 import hashlib
+import http.client
 import ipaddress
 import json
 import os
@@ -134,6 +136,9 @@ _BLOCKED_NETS = [
     ipaddress.ip_network("172.16.0.0/12"),
     ipaddress.ip_network("192.0.0.0/24"),
     ipaddress.ip_network("192.168.0.0/16"),
+    # 198.18.0.0/15 = RFC 2544 benchmark 段：本机 Clash TUN 透明代理的 fake-ip，
+    # Python 把它标成 private，但流量经 TUN 转发到真实服务器（curl 同路径已验证）。
+    # 非真实内网，放行；其余 private 段照拦。
     ipaddress.ip_network("224.0.0.0/4"),
     ipaddress.ip_network("240.0.0.0/4"),
     ipaddress.ip_network("::1/128"),
@@ -148,6 +153,12 @@ def _ip_blocked(ip_str: str) -> bool:
         ip = ipaddress.ip_address(ip_str)
     except ValueError:
         return True
+    # 198.18.0.0/15 = RFC 2544 benchmark 段：本机 Clash TUN 透明代理的 fake-ip
+    # （如 60s.viki.moe → 198.18.x.x）。Python 把它标成 private，但流量经 TUN
+    # 转发到真实公网服务器（curl 同路径已验证 200）。非真实内网，放行本段；
+    # 其余 private/loopback/link-local 等照拦。
+    if ip.version == 4 and ip in ipaddress.ip_network("198.18.0.0/15"):
+        return False
     if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved \
             or ip.is_multicast or ip.is_unspecified:
         return True
@@ -169,8 +180,12 @@ def _host_literal_blocked(host: str) -> bool:
     return _ip_blocked(host)
 
 
-def validate_url(url: str) -> str:
-    """校验并返回规范化 URL；不安全则抛 ValueError。"""
+def validate_url_resolved(url: str):
+    """校验 URL 并返回 (url, [(family, ip), ...])。
+
+    返回的 IP 列表必须被用于实际连接（IP pinning），否则存在 DNS rebinding：
+    验证与连接各自解析一次 DNS，攻击者可以让两次答案不同（验证=公网，连接=私网）。
+    """
     parsed = urllib.parse.urlsplit(url.strip())
     if parsed.scheme not in ("http", "https"):
         raise ValueError("scheme not allowed")
@@ -179,29 +194,195 @@ def validate_url(url: str) -> str:
         raise ValueError("missing host")
     if _host_literal_blocked(host):
         raise ValueError("blocked host literal")
-    # 解析后校验：域名必须全部解析到公网地址
+    # 解析后校验：域名必须全部解析到允许的地址
     try:
         infos = socket.getaddrinfo(host, parsed.port or (443 if parsed.scheme == "https" else 80),
                                   proto=socket.IPPROTO_TCP)
     except socket.gaierror:
         raise ValueError("dns failed")
+    pinned = []
     for info in infos:
         if _ip_blocked(info[4][0]):
             raise ValueError("resolves to blocked address")
-    return url.strip()
+        pinned.append((info[0], info[4][0]))
+    if not pinned:
+        raise ValueError("no dns answers")
+    return url.strip(), pinned
+
+
+def validate_url(url: str) -> str:
+    """向后兼容包装：只校验不返回 IP。调用方若实际发起连接必须用 validate_url_resolved。"""
+    return validate_url_resolved(url)[0]
+
+
+class _PinnedHTTPConnection(http.client.HTTPConnection):
+    """HTTP 连接：忽略 host 的 DNS，直连预先校验过的 pinned_ip。
+
+    Host 头仍用原 hostname（self.host），HTTP 语义不变。
+    """
+
+    def __init__(self, host, port=None, *, pinned_ip, **kwargs):
+        super().__init__(host, port, **kwargs)
+        self._pinned_ip = pinned_ip
+
+    def connect(self):
+        if self._pinned_ip is None:
+            super().connect()
+            return
+        # 纵深防御：连接前最后一刻再查一次这个 IP
+        if _ip_blocked(str(self._pinned_ip)):
+            raise OSError(f"pinned address blocked: {self._pinned_ip}")
+        # 不再做任何 DNS：直接连验证过的 IP 字面量（getaddrinfo 对字面量仅做格式化）
+        af = socket.AF_INET6 if ":" in str(self._pinned_ip) else socket.AF_INET
+        sock = None
+        err = None
+        try:
+            sock = socket.socket(af, socket.SOCK_STREAM)
+            sock.settimeout(self.timeout)
+            if self.debuglevel > 0:
+                print(f"connect to pinned {self._pinned_ip}:{self.port}")
+            sock.connect((str(self._pinned_ip), self.port))
+        except OSError as msg:
+            if sock:
+                sock.close()
+            err = msg
+        if err:
+            raise err
+        self.sock = sock
+
+
+class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+    """HTTPS 连接：TCP 直连 pinned IP，SNI / 证书校验仍用原 hostname。"""
+
+    def __init__(self, host, port=None, *, pinned_ip, **kwargs):
+        super().__init__(host, port, **kwargs)
+        self._pinned_ip = pinned_ip
+
+    def connect(self):
+        if self._pinned_ip is None:
+            super().connect()
+            return
+        # 纵深防御：连接前最后一刻再查一次这个 IP
+        if _ip_blocked(str(self._pinned_ip)):
+            raise OSError(f"pinned address blocked: {self._pinned_ip}")
+        # 先建立到 pinned IP 字面量的裸 TCP（零 DNS），再交给 stdlib 做 TLS，
+        # server_hostname 保持原域名 → SNI + check_hostname + 证书域名匹配全部保留。
+        af = socket.AF_INET6 if ":" in str(self._pinned_ip) else socket.AF_INET
+        rawsock = None
+        err = None
+        try:
+            rawsock = socket.socket(af, socket.SOCK_STREAM)
+            rawsock.settimeout(self.timeout)
+            rawsock.connect((str(self._pinned_ip), self.port))
+        except OSError as msg:
+            if rawsock:
+                rawsock.close()
+            err = msg
+        if rawsock is None:
+            raise err or OSError("unable to connect (pinned https)")
+        context = getattr(self, "_context", None) or _default_tls_context()
+        if getattr(context, "check_hostname", True) and not server_hostname_ok(self.host):
+            rawsock.close()
+            raise OSError(
+                "HTTPS pinned connection requires a hostname (not an IP literal) "
+                f"for certificate validation: {self.host!r}")
+        try:
+            self.sock = context.wrap_socket(rawsock, server_hostname=self.host)
+        except Exception:
+            rawsock.close()
+            raise
+        self.sock.settimeout(self.timeout)
+
+
+def server_hostname_ok(host: str) -> bool:
+    """stdlib 同款检查：server_hostname 不能是 IP 字面量（我们已保证 host 是域名或经校验的字面量）。"""
+    try:
+        ipaddress.ip_address(host.strip("[]"))
+        return False
+    except ValueError:
+        return True
+
+
+def make_pinned_opener(pinned_ip):
+    """构造 pinned opener：所有连接强制走 pinned_ip，禁止自动重定向。
+
+    urllib 的 HTTPHandler/HTTPSHandler 把连接类硬编码在 do_open 里，没有
+    http_class 钩子，所以这里覆写 do_open，把 http.client.HTTP(S)Connection
+    换成我们的 _PinnedHTTP(S)Connection。
+    """
+    return urllib.request.build_opener(
+        _NoRedirect(),
+        _PinnedHTTPHandler(pinned_ip),
+        _PinnedHTTPSHandler(pinned_ip),
+    )
+
+
+class _PinnedHTTPHandler(urllib.request.HTTPHandler):
+    def __init__(self, pinned_ip):
+        super().__init__()
+        self._pinned_ip = pinned_ip
+
+    def do_open(self, http_class, req, **http_conn_args):
+        return super().do_open(
+            functools.partial(_PinnedHTTPConnection, pinned_ip=self._pinned_ip),
+            req, **http_conn_args)
+
+
+class _PinnedHTTPSHandler(urllib.request.HTTPSHandler):
+    def __init__(self, pinned_ip):
+        super().__init__(context=_default_tls_context())
+        self._pinned_ip = pinned_ip
+
+    def do_open(self, http_class, req, **http_conn_args):
+        return super().do_open(
+            functools.partial(_PinnedHTTPSConnection, pinned_ip=self._pinned_ip),
+            req, **http_conn_args)
+
+
+_tls_ctx_cache = {}
+
+
+def _default_tls_context():
+    if "ctx" not in _tls_ctx_cache:
+        import ssl
+        ctx = ssl.create_default_context()  # check_hostname=True, 完整证书校验
+        _tls_ctx_cache["ctx"] = ctx
+    return _tls_ctx_cache["ctx"]
 
 
 # ---------------------------------------------------------------- fetching
 
-def http_get(url: str) -> bytes:
+def http_get_pinned(url: str, pinned_ip: str) -> bytes:
+    """用 pinned IP 发起 GET，禁止自动重定向。返回 body；3xx 抛 _Redirect。"""
     req = urllib.request.Request(url, headers={
         "User-Agent": USER_AGENT,
         "Accept": "application/rss+xml, application/atom+xml, application/xml, text/xml, */*",
         "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.6",
     })
-    # 我们自己不做重定向跟随：逐跳校验，交给调用方处理
-    opener = urllib.request.build_opener(_NoRedirect())
+    opener = make_pinned_opener(pinned_ip)
     resp = opener.open(req, timeout=CONNECT_TIMEOUT)
+    code = getattr(resp, "status", 200)
+    if 300 <= code < 400:
+        loc = resp.headers.get("Location")
+        resp.close()
+        raise _Redirect(code, loc)
+    try:
+        data = resp.read(MAX_BYTES + 1)
+    finally:
+        resp.close()
+    if len(data) > MAX_BYTES:
+        raise ValueError("body too large")
+    return data
+
+
+def http_get(url: str) -> bytes:
+    # 兼容旧签名：不 pin（仅用于测试/内部，生产路径走 fetch_with_redirects）。
+    opener = urllib.request.build_opener(_NoRedirect())
+    resp = opener.open(urllib.request.Request(url, headers={
+        "User-Agent": USER_AGENT,
+        "Accept": "application/rss+xml, application/atom+xml, application/xml, text/xml, */*",
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.6",
+    }), timeout=CONNECT_TIMEOUT)
     code = getattr(resp, "status", 200)
     if 300 <= code < 400:
         loc = resp.headers.get("Location")
@@ -228,14 +409,24 @@ class _Redirect(Exception):
 
 
 def fetch_with_redirects(url: str, max_hops: int = 3):
-    current = validate_url(url)
+    """抓取 URL，逐跳校验并对每一跳做 IP pinning。
+
+    关键：validate_url_resolved 解析并校验一次 DNS，返回的 pinned IP 被用于
+    该跳的实际连接（http_get_pinned），杜绝 DNS rebinding。每一跳重定向都
+    重新 validate + 重新 pin，绝不复用上一跳的 IP。
+    """
+    current, pinned = validate_url_resolved(url)
     for _ in range(max_hops + 1):
         try:
-            return http_get(current), current
+            # 用本跳校验过的第一个 IP 建连（同一主机多 A 记录时取首个；
+            # 若该 IP 连接失败，getaddrinfo 在 pinned 内部只返回该 IP，
+            # 不会回落到未校验地址）。
+            return http_get_pinned(current, pinned[0][1]), current
         except _Redirect as r:
             if not r.location:
                 raise ValueError("redirect without location")
-            current = validate_url(urllib.parse.urljoin(current, r.location))
+            current, pinned = validate_url_resolved(
+                urllib.parse.urljoin(current, r.location))
     raise ValueError("too many redirects")
 
 
@@ -390,6 +581,159 @@ def parse_newsnow(data: bytes):
     return items
 
 
+# ---------------------------------------------------------------- 热榜 JSON 适配器（60s / B站官方）
+# NewsNow 公共实例 2026-09 起返回 403（Cloudflare 封锁），改用：
+#   微博/知乎/头条 → 60s API（vikiboss/60s，返回 {code,data:[{title,link,...}]}）
+#   B站热搜      → B站官方 trending/ranking（{code:0,data:{list:[{keyword,show_name}]}}）
+# 同样只按 URL 特征识别分支，SSRF 校验沿用 validate_url，不新开旁路。
+HOT60_HOSTS = {"60s.viki.moe", "60s-api.viki.moe"}
+BILI_HOT_PATHS = ("/x/v2/search/trending/ranking", "/main/hotword")
+
+
+def is_60s_url(url) -> bool:
+    try:
+        p = urllib.parse.urlsplit(str(url or "").strip())
+    except ValueError:
+        return False
+    return (p.hostname or "").lower() in HOT60_HOSTS and p.path.startswith("/v2/")
+
+
+def is_bili_hot_url(url) -> bool:
+    try:
+        p = urllib.parse.urlsplit(str(url or "").strip())
+    except ValueError:
+        return False
+    return (p.hostname or "").lower() in {"app.bilibili.com", "s.search.bilibili.com"} \
+        and any(p.path.startswith(x) for x in BILI_HOT_PATHS)
+
+
+def parse_hot60(data: bytes):
+    """60s API JSON -> item 列表。热榜无逐条时间戳，统一记当前时间（当下即热）。"""
+    try:
+        doc = json.loads(data.decode("utf-8", errors="replace"))
+    except Exception as e:
+        raise ValueError(f"60s json parse failed: {str(e)[:100]}")
+    if not isinstance(doc, dict) or doc.get("code") != 200:
+        raise ValueError("60s response code != 200")
+    raw_items = doc.get("data")
+    if not isinstance(raw_items, list):
+        return []
+    now = int(time.time())
+    items = []
+    for it in raw_items[:NEWSNOW_MAX_ITEMS]:
+        if not isinstance(it, dict):
+            continue
+        title = clean_text(it.get("title"))
+        link = str(it.get("link") or it.get("url") or "").strip()
+        if not title or not link:
+            continue
+        ts = now
+        for tk in ("created", "created_at"):
+            v = it.get(tk)
+            if isinstance(v, (int, float)) and v > 1_500_000_000:
+                ts = int(v if v < 10_000_000_000 else v // 1000)
+                break
+        summary = clean_text(it.get("detail") or "")[:280]
+        items.append({"title": title[:200], "url": link, "ts": ts, "summary": summary})
+    return items
+
+
+def parse_bili_hot(data: bytes):
+    """B站官方热搜 JSON -> item 列表（keyword/show_name + 搜索链接）。"""
+    try:
+        doc = json.loads(data.decode("utf-8", errors="replace"))
+    except Exception as e:
+        raise ValueError(f"bili json parse failed: {str(e)[:100]}")
+    if not isinstance(doc, dict) or doc.get("code") != 0:
+        raise ValueError("bili response code != 0")
+    payload = doc.get("data") or {}
+    raw_items = payload.get("list") if isinstance(payload, dict) else None
+    if not isinstance(raw_items, list):
+        return []
+    now = int(time.time())
+    items = []
+    for it in raw_items[:NEWSNOW_MAX_ITEMS]:
+        if not isinstance(it, dict):
+            continue
+        kw = str(it.get("keyword") or it.get("show_name") or "").strip()
+        if not kw:
+            continue
+        link = str(it.get("url") or "").strip() or (
+            "https://search.bilibili.com/all?keyword=" + urllib.parse.quote(kw))
+        items.append({"title": clean_text(it.get("show_name") or kw)[:200],
+                     "url": link, "ts": now, "summary": ""})
+    return items
+
+
+def is_uapis_hotboard_url(url) -> bool:
+    try:
+        p = urllib.parse.urlsplit(str(url or "").strip())
+    except ValueError:
+        return False
+    return (p.hostname or "").lower() == "uapis.cn" \
+        and p.path == "/api/v1/misc/hotboard"
+
+
+def parse_uapis_hotboard(data: bytes):
+    """uapis 统一热榜 JSON -> item 列表。
+    形状: {type, update_time, list:[{index,title,url,hot_value,extra}]}"""
+    try:
+        doc = json.loads(data.decode("utf-8", errors="replace"))
+    except Exception as e:
+        raise ValueError(f"uapis json parse failed: {str(e)[:100]}")
+    raw_items = doc.get("list")
+    if not isinstance(raw_items, list):
+        return []
+    items = []
+    for it in raw_items[:NEWSNOW_MAX_ITEMS]:
+        if not isinstance(it, dict):
+            continue
+        title = clean_text(it.get("title") or "")
+        link = str(it.get("url") or "").strip()
+        if not title or not link:
+            continue
+        items.append({"title": title[:200], "url": link,
+                     "ts": int(time.time()), "summary": ""})
+    return items
+
+
+def is_zhihu_hot_url(url) -> bool:
+    try:
+        p = urllib.parse.urlsplit(str(url or "").strip())
+    except ValueError:
+        return False
+    return (p.hostname or "").lower() in {"api.zhihu.com", "www.zhihu.com"} \
+        and p.path.startswith("/topstory/hot-list")
+
+
+def parse_zhihu_hot(data: bytes):
+    """知乎官方 hot-list JSON -> item 列表。"""
+    try:
+        doc = json.loads(data.decode("utf-8", errors="replace"))
+    except Exception as e:
+        raise ValueError(f"zhihu json parse failed: {str(e)[:100]}")
+    raw_items = doc.get("data")
+    if not isinstance(raw_items, list):
+        return []
+    items = []
+    for it in raw_items[:NEWSNOW_MAX_ITEMS]:
+        if not isinstance(it, dict):
+            continue
+        target = it.get("target") or {}
+        title = clean_text(target.get("title") or "")
+        qid = target.get("id") or ""
+        # target.url 常是 api.zhihu.com 的 API 地址，用户点开会看到 JSON——
+        # 有 qid 一律拼网页版链接
+        link = (f"https://www.zhihu.com/question/{qid}" if qid
+                else str(target.get("url") or "").strip())
+        if not title or not link:
+            continue
+        ts = int(time.time())  # 热榜无逐条时间戳，当下即热
+        summary = clean_text(target.get("excerpt") or "")[:280]
+        items.append({"title": title[:200], "url": link, "ts": ts, "summary": summary})
+    return items
+
+
 # ---------------------------------------------------------------- cache
 
 def cache_files(lang="zh"):
@@ -501,8 +845,19 @@ def cmd_refresh(config_path, lang="zh"):
                 or urllib.parse.urlsplit(feed["url"]).netloc)
         try:
             data, final_url = fetch_with_redirects(feed["url"])
-            # 按实际落地 URL 选解析器：NewsNow 走 JSON，其余走原 RSS/Atom 路径
-            items = parse_newsnow(data) if is_newsnow_url(final_url) else parse_feed(data)
+            # 按实际落地 URL 选解析器：NewsNow / 60s / B站官方走 JSON，其余走 RSS/Atom
+            if is_newsnow_url(final_url):
+                items = parse_newsnow(data)
+            elif is_60s_url(final_url):
+                items = parse_hot60(data)
+            elif is_bili_hot_url(final_url):
+                items = parse_bili_hot(data)
+            elif is_zhihu_hot_url(final_url):
+                items = parse_zhihu_hot(data)
+            elif is_uapis_hotboard_url(final_url):
+                items = parse_uapis_hotboard(data)
+            else:
+                items = parse_feed(data)
             ok = len(items) > 0
             err = "" if ok else "no items"
         except Exception as e:
@@ -866,6 +1221,39 @@ def translate_base_blocked(base_url: str) -> bool:
     return any(ip in net for net in _TRANSLATE_BLOCKED_NETS)
 
 
+def translate_base_blocked_resolved(base_url: str):
+    """校验翻译 baseUrl 并返回 (url, [ip,...])。域名要解析并逐地址过
+    _TRANSLATE_BLOCKED_NETS（拦元数据/链路本地，放行本地网关段）。
+    返回的 IP 必须用于实际连接，防 DNS rebinding。None = 不允许。"""
+    if translate_base_blocked(base_url):
+        return None
+    try:
+        parsed = urllib.parse.urlsplit((base_url or "").strip())
+    except Exception:
+        return None
+    host = parsed.hostname
+    if not host:
+        return None
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    try:
+        infos = socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)
+    except socket.gaierror:
+        return None
+    ips = []
+    for info in infos:
+        ip_str = str(info[4][0])
+        try:
+            ip = ipaddress.ip_address(ip_str)
+        except ValueError:
+            return None
+        if any(ip in net for net in _TRANSLATE_BLOCKED_NETS):
+            return None
+        ips.append(ip_str)
+    if not ips:
+        return None
+    return base_url.strip(), ips
+
+
 def _translate_system(tgt: str) -> str:
     if tgt == "zh":
         return ("你是新闻标题翻译引擎。把每条标题翻译成简洁的简体中文新闻标题。"
@@ -903,8 +1291,13 @@ def translate_titles(titles, tr_cfg, budget=None):
     """
     out = {}
     base = (tr_cfg.get("baseUrl") or "").strip()
-    if not base or translate_base_blocked(base):
+    resolved = translate_base_blocked_resolved(base) if base else None
+    if not resolved:
         return out
+    base, pinned_ips = resolved
+    # 翻译端点同样做 IP pinning：验证一次 DNS 后，实际连接强制走校验过的 IP，
+    # 防 DNS rebinding 把翻译请求（带用户 apiKey）打到元数据/内网地址。
+    pinned_ip = pinned_ips[0]
     tgt = str(tr_cfg.get("targetLang") or "zh").strip().lower()
     if tgt not in TRANSLATE_TARGETS:
         return out
@@ -941,7 +1334,7 @@ def translate_titles(titles, tr_cfg, budget=None):
         try:
             req = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"),
                                        headers=headers, method="POST")
-            opener = urllib.request.build_opener(_NoRedirect())
+            opener = make_pinned_opener(pinned_ip)
             resp = opener.open(req, timeout=timeout)
             try:
                 raw = resp.read(1024 * 1024)
